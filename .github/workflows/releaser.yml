@@ -1,0 +1,31 @@
+name: Release SSD Shell Binary
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v5
+
+      - name: Build Rust Binary in Arch Docker
+        run: |
+          docker run --rm -v $(pwd):/workspace -w /workspace archlinux:latest bash -c "
+            pacman -Syu --noconfirm base-devel rust gtk4 gtk4-layer-shell pkgconf alsa-lib pulseaudio
+            cargo build --release
+          "
+
+      - name: Compress Binary
+        run: |
+          tar -czvf cos-ssd-x86_64.tar.gz -C target/release/ cos-ssd
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: cos-ssd-x86_64.tar.gz
