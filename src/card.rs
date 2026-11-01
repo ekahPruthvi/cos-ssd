@@ -110,6 +110,8 @@ pub fn spawn_card(app: &gtk4::Application, spec: CardSpec) {
 
     restore_btn.connect_clicked(move |_| restore_card(id));
 
+    let size: Rc<Cell<(i32, i32)>> = Rc::new(Cell::new((cw, ch)));
+
     let pos = Rc::new(RefCell::new(Pos {
         mon: monitor,
         top: top0,
@@ -147,9 +149,12 @@ pub fn spawn_card(app: &gtk4::Application, spec: CardSpec) {
         let base = base.clone();
         let moved = moved.clone();
         let win_weak = win.downgrade();
+        let size = size.clone();
         move |_, dx, dy| {
             let Some((bx, by)) = base.get() else { return; };
             let Some(win) = win_weak.upgrade() else { return; };
+            // the card may have grown to fit an app that can't shrink that far
+            let (cw, ch) = size.get();
             let (dx, dy) = (dx.round() as i32, dy.round() as i32);
 
             if !moved.get() {
@@ -254,6 +259,10 @@ pub fn spawn_card(app: &gtk4::Application, spec: CardSpec) {
         change: SizeChange::SetFixed(ch),
     });
 
+    // Some apps can't shrink that far. Once niri has applied the size, grow the
+    // card to the window's real size so no part of the app sticks out.
+    fit_card_to_window(id, size.clone(), win.downgrade(), root.clone());
+
     win.set_visible(true);
 
     CARDS.with(|c| {
@@ -269,20 +278,72 @@ pub fn spawn_card(app: &gtk4::Application, spec: CardSpec) {
     publish_minimized();
 }
 
+/// Polls niri until the window's size settles after being shrunk, then makes the
+/// card exactly that size (apps with a minimum size end up bigger than requested).
+fn fit_card_to_window(
+    id: u64,
+    size: Rc<Cell<(i32, i32)>>,
+    win: glib::WeakRef<ApplicationWindow>,
+    root: GtkBox,
+) {
+    let (tx, rx) = mpsc::channel::<(i32, i32)>();
+
+    std::thread::spawn(move || {
+        let mut last: Option<(i32, i32)> = None;
+        for _ in 0..15 {
+            std::thread::sleep(Duration::from_millis(120));
+            let Ok(mut sock) = Socket::connect() else { continue; };
+            let Ok(Ok(Response::Windows(ws))) = sock.send(Request::Windows) else { continue; };
+            let Some(w) = ws.into_iter().find(|w| w.id == id) else { return; };
+            let (sw, sh) = w.layout.tile_size;
+            let cur = (sw.round() as i32, sh.round() as i32);
+            // two identical samples in a row = the client has committed its size
+            if last == Some(cur) {
+                break;
+            }
+            last = Some(cur);
+        }
+        if let Some(cur) = last {
+            let _ = tx.send(cur);
+        }
+    });
+
+    glib::timeout_add_local(Duration::from_millis(60), move || {
+        match rx.try_recv() {
+            Ok((w, h)) => {
+                if is_card(id) && w > 0 && h > 0 && (w, h) != size.get() {
+                    size.set((w, h));
+                    root.set_size_request(w, h);
+                    if let Some(win) = win.upgrade() {
+                        win.set_default_size(w, h);
+                    }
+                }
+                glib::ControlFlow::Break
+            }
+            Err(mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+            Err(mpsc::TryRecvError::Disconnected) => glib::ControlFlow::Break,
+        }
+    });
+}
+
+/// Tell minicardstat.sock which apps are currently minimized (in card mode).
 fn publish_minimized() {
-    let mut apps: Vec<String> = CARDS.with(|c| {
+    let mut entries: Vec<(u64, String)> = CARDS.with(|c| {
         c.borrow()
-            .values()
-            .map(|h| {
-                h.spec
-                    .app_id
-                    .clone()
-                    .unwrap_or_else(|| "unknown".to_string())
+            .iter()
+            .map(|(id, h)| {
+                (
+                    *id,
+                    h.spec
+                        .app_id
+                        .clone()
+                        .unwrap_or_else(|| "unknown".to_string()),
+                )
             })
             .collect()
     });
-    apps.sort();
-    crate::minicardstat::publish(apps);
+    entries.sort();
+    crate::minicardstat::publish(entries);
 }
 
 pub fn restore_card(id: u64) {
@@ -315,15 +376,20 @@ pub fn restore_card(id: u64) {
     niri_action(Action::FocusWindow { id });
 }
 
-pub fn maximize_app(app_id: &str) -> usize {
+/// Restore cards by niri window id (if `target` is a number) or by app_id
+/// (case-insensitive, every card of that app). Returns how many were restored.
+pub fn maximize_target(target: &str) -> usize {
+    let by_id: Option<u64> = target.parse().ok();
     let ids: Vec<u64> = CARDS.with(|c| {
         c.borrow()
             .iter()
-            .filter(|(_, h)| {
-                h.spec
+            .filter(|(id, h)| match by_id {
+                Some(n) => **id == n,
+                None => h
+                    .spec
                     .app_id
                     .as_deref()
-                    .map_or(false, |a| a.eq_ignore_ascii_case(app_id))
+                    .map_or(false, |a| a.eq_ignore_ascii_case(target)),
             })
             .map(|(id, _)| *id)
             .collect()

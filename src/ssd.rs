@@ -169,6 +169,22 @@ pub fn spawn_shelly_side_decorations(app: &gtk4::Application) {
         niri_action(Action::CloseWindow { id: None });
     });
 
+    let hideges = gtk4::GestureClick::new();
+
+    hideges.set_button(3);
+
+    let barry = win.clone();
+    hideges.connect_pressed( move |_,_,_,_|{
+        barry.set_visible(false);
+        let barry = barry.clone();
+        glib::timeout_add_local(Duration::from_secs(2), move || {
+            barry.set_visible(true);
+            glib::ControlFlow::Break
+        });
+    });
+
+    bar.add_controller(hideges);
+
     btn_float.connect_clicked(|_| {
         niri_action(Action::FullscreenWindow { id: None });
     });

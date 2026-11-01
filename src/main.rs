@@ -123,10 +123,10 @@ fn main() {
         }
         Some("--update") | Some("-U") => exit(run_update()),
         Some("--cards") | Some("-C") => exit(minicardstat::nlq()),
-        Some("--maximize") | Some("-m") => match args.get(2) {
+        Some("--maximize") | Some("-m") | Some("-M") => match args.get(2) {
             Some(app_id) => exit(minicardstat::maximize(app_id)),
             None => {
-                eprintln!("usage: cos-ssd -m <app_id>   (e.g. cos-ssd -m kitty)");
+                eprintln!("usage: cos-ssd -m <window_id|app_id>   (e.g. cos-ssd -m 41, cos-ssd -m kitty)");
                 exit(2);
             }
         },
@@ -135,10 +135,14 @@ fn main() {
             println!("Display Server-side decorations for niri (cynageOS)\n");
             println!("  -V, --version        print version");
             println!("  -U, --update         update from github.com/{}/{}", REPO_OWNER, REPO_NAME);
-            println!("  -C, --cards          list minimized apps (cards), one per line");
-            println!("  -m, --maximize APP   maximize a minimized app, e.g. -m kitty");
+            println!("  -C, --cards          list minimized windows (cards): id<TAB>app_id per line");
+            println!("  -m, --maximize ID|APP  maximize a minimized window by id, or every one of an app, e.g. -m 41 / -m kitty");
             println!("  -H, --help           show this help");
             exit(0);
+        }
+        Some(other) if other.starts_with('-') => {
+            eprintln!("cos-ssd: unknown option '{other}' (try --help)");
+            exit(2);
         }
         _ => {}
     }
