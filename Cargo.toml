@@ -1,6 +1,6 @@
 [package]
 name = "cos-ssd"
-version = "1.5.10"
+version = "1.5.20"
 edition = "2024"
 authors = ["ekahPruthvi <ekahpdp@gmail.com>"]
 description = "Display Server-Side Decorations for COS"

@@ -7,8 +7,11 @@ use std::sync::mpsc;
 use std::time::Duration;
 use chrono::Local;
 
+use crate::card::{self, CardSpec};
+
 #[derive(Debug, Clone, PartialEq)]
 struct FocusedGeo {
+    id: u64,
     x: i32,
     y: i32,
     xsize: i32,
@@ -26,6 +29,7 @@ enum SsdEvent {
 
 const DRAG_THRESHOLD: f64 = 4.0;
 const MIN_RESIZE: i32 = 100;
+const CARD_TRIGGER: i32 = 140;
 
 const PROBE_PATH: &str = "/var/lib/cynager/info.probe";
 
@@ -72,6 +76,9 @@ pub fn nocsd_add(app_id: &str) -> std::io::Result<()> {
 }
 
 pub fn spawn_shelly_side_decorations(app: &gtk4::Application) {
+    // bind minicardstat.sock up front so queries work even with no cards
+    crate::minicardstat::init();
+
     let (tx, rx) = mpsc::channel::<SsdEvent>();
     let rx = Rc::new(RefCell::new(rx));
     // let alt_held = Rc::new(RefCell::new(false));
@@ -428,6 +435,7 @@ pub fn spawn_shelly_side_decorations(app: &gtk4::Application) {
         let ghost_win_weak = ghost_win.downgrade();
         let resize_start: Rc<RefCell<Option<FocusedGeo>>> = Rc::new(RefCell::new(None));
         let resizing: Rc<RefCell<bool>> = Rc::new(RefCell::new(false));
+        let app_in = app.clone();
 
         side_btn.set_cursor_from_name(Some("se-resize"));
 
@@ -480,6 +488,15 @@ pub fn spawn_shelly_side_decorations(app: &gtk4::Application) {
 
                 let (w, h) = resized_dims(&geo, dx, dy);
                 ghost_box_set_size(&ghost_win, w, h);
+
+                // Highlight the ghost when releasing now would turn it into a card.
+                if let Some(child) = ghost_win.child() {
+                    if in_card_range(w, h) {
+                        child.add_css_class("ssdDragGhostCard");
+                    } else {
+                        child.remove_css_class("ssdDragGhostCard");
+                    }
+                }
             }
         });
 
@@ -494,6 +511,9 @@ pub fn spawn_shelly_side_decorations(app: &gtk4::Application) {
 
                 if let Some(ghost_win) = ghost_win_weak.upgrade() {
                     ghost_win.set_visible(false);
+                    if let Some(child) = ghost_win.child() {
+                        child.remove_css_class("ssdDragGhostCard");
+                    }
                 }
 
                 if !was_resizing {
@@ -502,6 +522,26 @@ pub fn spawn_shelly_side_decorations(app: &gtk4::Application) {
                 let Some(geo) = geo else { return; };
 
                 let (w, h) = resized_dims(&geo, dx.round() as i32, dy.round() as i32);
+
+                // Shrunk to just the icon: switch to card mode instead of resizing.
+                if in_card_range(w, h) {
+                    card::spawn_card(
+                        &app_in,
+                        CardSpec {
+                            window_id: geo.id,
+                            app_id: geo.app_id.clone(),
+                            output: geo.output.clone(),
+                            prev_x: geo.x,
+                            prev_y: geo.y,
+                            prev_w: geo.xsize,
+                            prev_h: geo.ysize,
+                            card_w: w,
+                            card_h: h,
+                        },
+                    );
+                    return;
+                }
+
                 let dw = w - geo.xsize;
                 let dh = h - geo.ysize;
 
@@ -552,6 +592,12 @@ pub fn spawn_shelly_side_decorations(app: &gtk4::Application) {
         }
 
         if let Some(ev) = last {
+            // Windows in card mode get no bar / resize handle.
+            let ev = match ev {
+                SsdEvent::Focused(g) if card::is_card(g.id) => SsdEvent::NoFocus,
+                e => e,
+            };
+
             match ev {
                 SsdEvent::Focused(geo) => {
                     *latest_geo.borrow_mut() = Some(geo.clone());
@@ -625,6 +671,10 @@ pub fn spawn_shelly_side_decorations(app: &gtk4::Application) {
     });
 }
 
+fn in_card_range(w: i32, h: i32) -> bool {
+    w <= CARD_TRIGGER && h <= CARD_TRIGGER
+}
+
 fn resized_dims(geo: &FocusedGeo, dx: i32, dy: i32) -> (i32, i32) {
     (
         (geo.xsize + dx).max(MIN_RESIZE.min(geo.xsize)),
@@ -665,7 +715,7 @@ fn ghost_box_set_icon(ghost_win: &ApplicationWindow, app_id: Option<&str>) {
     gbox.append(&image);
 }
 
-fn monitor_at_point(x: i32, y: i32) -> Option<gdk::Monitor> {
+pub(crate) fn monitor_at_point(x: i32, y: i32) -> Option<gdk::Monitor> {
     let display = gdk::Display::default()?;
     let monitors = display.monitors();
     for i in 0..monitors.n_items() {
@@ -678,7 +728,7 @@ fn monitor_at_point(x: i32, y: i32) -> Option<gdk::Monitor> {
     None
 }
 
-fn find_monitor_by_connector(connector: &str) -> Option<gdk::Monitor> {
+pub(crate) fn find_monitor_by_connector(connector: &str) -> Option<gdk::Monitor> {
     let display = gdk::Display::default()?;
     let monitors = display.monitors();
     for i in 0..monitors.n_items() {
@@ -699,7 +749,7 @@ fn make_btn(label: &str, classes: &[&str]) -> Button {
     b
 }
 
-fn niri_action(action: Action) {
+pub(crate) fn niri_action(action: Action) {
     if let Ok(mut sock) = Socket::connect() {
         let _ = sock.send(Request::Action(action));
     }
@@ -796,6 +846,7 @@ fn query_focused_geo() -> Option<FocusedGeo> {
     };
 
     Some(FocusedGeo {
+        id: w.id,
         x: x.round() as i32,
         y: y.round() as i32,
         xsize: xsize.round() as i32,

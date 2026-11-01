@@ -3,13 +3,14 @@ use self_update::cargo_crate_version;
 use std::{env, process::exit};
 
 mod ssd;
+mod card;
+mod minicardstat;
 
 const APP_ID: &str = "ekah.scu.cosssd";
 const BIN_PATH: &str = "/usr/bin/cos-ssd";
 const REPO_OWNER: &str = "ekahPruthvi";
 const REPO_NAME: &str = "cos-ssd";
 
-/// Same stylesheet capsule uses, so decorations stay visually in sync.
 fn load_css() {
     let home = env::var("HOME").unwrap_or_else(|_| ".".to_string());
     let css_path = format!("{}/.config/capsule/dark.css", home);
@@ -28,7 +29,6 @@ fn load_css() {
 }
 
 fn on_activate(app: &Application) {
-    // All SSD windows start hidden; keep the app alive regardless.
     std::mem::forget(app.hold());
     load_css();
     ssd::spawn_shelly_side_decorations(app);
@@ -122,12 +122,22 @@ fn main() {
             exit(0);
         }
         Some("--update") | Some("-U") => exit(run_update()),
+        Some("--cards") | Some("-C") => exit(minicardstat::nlq()),
+        Some("--maximize") | Some("-m") => match args.get(2) {
+            Some(app_id) => exit(minicardstat::maximize(app_id)),
+            None => {
+                eprintln!("usage: cos-ssd -m <app_id>   (e.g. cos-ssd -m kitty)");
+                exit(2);
+            }
+        },
         Some("--help") | Some("-H") => {
             println!("cos-ssd {}", env!("CARGO_PKG_VERSION"));
             println!("Display Server-side decorations for niri (cynageOS)\n");
-            println!("  -V, --version   print version");
-            println!("  -U, --update    update from github.com/{}/{}", REPO_OWNER, REPO_NAME);
-            println!("  -H, --help      show this help");
+            println!("  -V, --version        print version");
+            println!("  -U, --update         update from github.com/{}/{}", REPO_OWNER, REPO_NAME);
+            println!("  -C, --cards          list minimized apps (cards), one per line");
+            println!("  -m, --maximize APP   maximize a minimized app, e.g. -m kitty");
+            println!("  -H, --help           show this help");
             exit(0);
         }
         _ => {}
@@ -135,6 +145,5 @@ fn main() {
 
     let app = Application::new(Some(APP_ID), Default::default());
     app.connect_activate(on_activate);
-    // Don't forward our own argv to GTK.
     app.run_with_args::<&str>(&[]);
 }
