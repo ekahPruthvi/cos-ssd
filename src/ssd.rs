@@ -76,12 +76,10 @@ pub fn nocsd_add(app_id: &str) -> std::io::Result<()> {
 }
 
 pub fn spawn_shelly_side_decorations(app: &gtk4::Application) {
-    // bind minicardstat.sock up front so queries work even with no cards
     crate::minicardstat::init();
 
     let (tx, rx) = mpsc::channel::<SsdEvent>();
     let rx = Rc::new(RefCell::new(rx));
-    // let alt_held = Rc::new(RefCell::new(false));
 
     let win = ApplicationWindow::builder()
         .application(app)
@@ -504,8 +502,9 @@ pub fn spawn_shelly_side_decorations(app: &gtk4::Application) {
 
                 let (w, h) = resized_dims(&geo, dx, dy);
                 ghost_box_set_size(&ghost_win, w, h);
+                ghost_win.set_margin(Edge::Top, (geo.y - 4 - (h - geo.ysize) / 2).max(0));
+                ghost_win.set_margin(Edge::Left, (geo.x - 4 - (w - geo.xsize) / 2).max(0));
 
-                // Highlight the ghost when releasing now would turn it into a card.
                 if let Some(child) = ghost_win.child() {
                     if in_card_range(w, h) {
                         child.add_css_class("ssdDragGhostCard");
@@ -539,7 +538,6 @@ pub fn spawn_shelly_side_decorations(app: &gtk4::Application) {
 
                 let (w, h) = resized_dims(&geo, dx.round() as i32, dy.round() as i32);
 
-                // Shrunk to just the icon: switch to card mode instead of resizing.
                 if in_card_range(w, h) {
                     card::spawn_card(
                         &app_in,
@@ -571,6 +569,14 @@ pub fn spawn_shelly_side_decorations(app: &gtk4::Application) {
                     niri_action(Action::SetWindowHeight {
                         id: None,
                         change: SizeChange::AdjustFixed(dh),
+                    });
+                }
+
+                if dw != 0 || dh != 0 {
+                    niri_action(Action::MoveFloatingWindow {
+                        id: None,
+                        x: PositionChange::AdjustFixed(-(dw as f64) / 2.0),
+                        y: PositionChange::AdjustFixed(-(dh as f64) / 2.0),
                     });
                 }
             }
@@ -608,7 +614,6 @@ pub fn spawn_shelly_side_decorations(app: &gtk4::Application) {
         }
 
         if let Some(ev) = last {
-            // Windows in card mode get no bar / resize handle.
             let ev = match ev {
                 SsdEvent::Focused(g) if card::is_card(g.id) => SsdEvent::NoFocus,
                 e => e,
@@ -693,8 +698,8 @@ fn in_card_range(w: i32, h: i32) -> bool {
 
 fn resized_dims(geo: &FocusedGeo, dx: i32, dy: i32) -> (i32, i32) {
     (
-        (geo.xsize + dx).max(MIN_RESIZE.min(geo.xsize)),
-        (geo.ysize + dy).max(MIN_RESIZE.min(geo.ysize)),
+        (geo.xsize + dx * 2).max(MIN_RESIZE.min(geo.xsize)),
+        (geo.ysize + dy * 2).max(MIN_RESIZE.min(geo.ysize)),
     )
 }
 
